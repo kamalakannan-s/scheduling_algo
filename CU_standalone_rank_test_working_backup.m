@@ -1,0 +1,156 @@
+clear all;
+clc;
+close all;
+L = 4;
+M = 2;
+slots = 50;
+H_ref = zeros(M,M,2*L,2*L);
+A = zeros(2*L,2*L);
+A(4,5) = 1;
+A(8,1) = 1;
+H_ref(:,:,4,5) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
+H_ref(:,:,8,1) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
+N = 0.02*ones(1,2*L);
+link_count_data = zeros(1,2*L);
+link_count_fail = zeros(1,2*L);
+count = 0;
+for i = 1:2:2*L
+    H_ref(:,:,i,i+1) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
+%     H_ref(:,:,i,i+1) = 1/sqrt(2)*eye(M)*complex(randn(1),randn(1));
+    H_ref(:,:,i+1,i) = H_ref(:,:,i,i+1); %reciprocity
+end
+%finding the victim
+v = [];
+vs_pair = [];
+for i = 1:2*L
+    interference_array = A(i,:);
+    interferer_num(i) = length(find(interference_array));
+    if interferer_num(i) > 0
+       v = [v i];
+       vs_pair = [vs_pair find(interference_array)];
+    end
+end
+V = length(v);
+rate_mat = 1000*ones(2*L,V+1);
+rank_mat = (M+1)*ones(2*L,V+1);
+snr_min = 1000*ones(2*L,V+1);
+H_vv = H_ref(:,:,v(1)+mod(v(1),2)-1,v(1)+mod(v(1),2));
+s1 = 1:2*L;
+    for i = 1:V
+        s1(v(i)) = 0;
+    end
+s = find(s1);
+S = length(s);
+for i = 1:S
+%     victim = 0;
+    H(:,:,:) = H_ref(:,:,s(i),:);
+    N0 = N(s(i)+(2*mod(s(i),2)-1));
+    ind = s(i);
+    interferer = find(A(ind,:));
+    [standalone_rank(ind),rank_mat(ind,1),rate_mat(ind,1),snr_min(ind,1)] = standalone_rank_SIC_CU(H,N0,M,ind,interferer_num(ind),interferer);
+end
+for i = 1:V
+    H(:,:,:) = H_ref(:,:,v(i),:);
+    N0 = N(v(i)+(2*mod(v(i),2)-1));
+    ind = v(i);
+    interferer = find(A(ind,:));
+    [standalone_rank(ind),rank_mat(ind,1),rate_mat(ind,1),snr_min(ind,1)] = standalone_rank_SIC_CU(H,N0,M,ind,interferer_num(ind),interferer);
+    k = length(interferer);
+    for j = 1:k
+        current = interferer(j);
+        [U,S,prec] = svd(H(:,:,ind+(2*mod(ind,2)-1)));
+        G_vv = H(:,:,ind+(2*mod(ind,2)-1))*prec(:,1:standalone_rank(ind));
+        H_sv = H(:,:,current);
+        H_ss = H_ref(:,:,current+mod(current,2)-1,current+mod(current,2));
+        [standalone_rank(current),rank_mat(current,i+1),rate_mat(current,i+1),snr_min(current,i+1)] = standalone_rank_SIC_CU_interferer(H_ss,H_sv,G_vv,N0,M);
+%     standalone_rank(ind) = standalone_rank_SIC_CU_victim(H,N0,M,ind,interferer_num(ind),interferer,H_ref,standalone_rank);
+    end
+
+end
+
+for i = 1:V
+rate_mat(:,i+1) = min(rate_mat(:,1),rate_mat(:,i+1));
+rank_mat(:,i+1) = min(rank_mat(:,1),rank_mat(:,i+1));
+end
+
+%assuming 2 users per cell and 2 cells in total
+c = 2;
+l = 2;
+B = 1;
+B = B_matrix_creation_CU(B,l);
+B = B(2:end,:);
+for i = 1:c-1
+    B = B_matrix_creation_CU(B,l);
+end
+
+w = ones(2*L,1);
+iter = length(B); %always return the largest dimension of matrix, column is always large
+for slots_ind = 1:slots
+
+for i = 1:iter
+    b = B(:,i);
+    rate_sel = rate_mat(:,1); % assign standalone rate in the beginning
+    selected_ind = find(b');
+    victim_sel = ismember(v,selected_ind);
+    for j = 1:V %checking whether any of the victim is selected or not
+        if victim_sel(j)
+            rate_sel = min(rate_sel,rate_mat(:,j)); %jth victim is selected in the scheduling combination under consideration
+        end
+%         rank_mat(:,j+1) = min(rank_mat(:,j),rank_mat(:,1));
+%         snr_min(:,j+1) = min(snr_min(:,j+1),snr_min(:,1));
+    end
+    obj(i) = sum(b.*w.*rate_sel);
+end
+  [dummy B_ind] =  max(obj);
+  b = B(:,B_ind);
+%selecting rank for the scheduled links
+rank_sel = rank_mat(:,1); % assign standalone rate in the beginning
+selected_ind = find(b');
+victim_sel = ismember(v,selected_ind);
+    for j = 1:V %checking whether any of the victim is selected or not
+        if victim_sel(j)
+            rank_sel = min(rank_sel,rank_mat(:,j)); %jth victim is selected in the scheduling combination under consideration
+        end
+    end
+    rank_sel = rank_sel.*b;
+%rank_sel is the rank of the links and b is the scheduled link for the slot
+%call the cells(both tx and rx immediately) to check for successful
+%transmission
+%if successful, update the corresponding weigth
+%now go to next slot scheduling
+link = find(b');
+cell = length(link);
+for i = 1:cell
+    cell_number = ceil(link(i)/l);
+    [lia,loc] = ismember(link(i),v);
+    rank = rank_sel(link(i));
+    mod_order = 1;
+    H_vv = H_ref(:,:,link(i)+mod(link(i),2),link(i)); %check once more
+    if lia %checking whether the scheduled link is victim or not
+        print("victim is selected");
+        if ismember(vs_pair(loc),link)
+            print("both the interferer and victim are selected");
+            rank_int = rank_sel(vs_pair(loc));
+            H_sv = H_ref(:,:,link(i),vs_pair(loc));
+            H_ss = H_ref(:,:,vs_pair(loc)+mod(vs_pair(loc),2),vs_pair(loc));
+            cell_number_int = ceil(vs_pair(loc)/l);
+            mod_order_int = 1;
+            [success(i),N(link(i))] = SIC_PHY(rank,rank_int,mod_order,mod_order_int,cell_number,cell_number_int,H_ss,H_vv,H_sv);
+        else
+            [success(i),N(link(i))] = SVD_PHY(rank,mod_order,cell_number,H_vv);
+        end
+    else
+        [success(i),N(link(i))] = SVD_PHY(rank,mod_order,cell_number,H_vv);
+    end
+    if success
+        %update weight of link(i) position
+        w(link(i)) = 1;
+        link_count_data(link(i)) = link_count_data(link(i))+1;
+    else
+        w(link(i)) = w(link(i)) + 1;
+        count = count+1;
+        link_count_fail(link(i)) = link_count_fail(link(i))+1;
+    end
+end
+end
+
