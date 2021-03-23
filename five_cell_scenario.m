@@ -1,29 +1,36 @@
 clear all;
 clc;
 close all;
-L = 4;
-M = 2;
-slots = 500;
-H_ref = zeros(M,M,2*L,2*L);
-A = zeros(2*L,2*L);
+c = 5;% of cells
+L = 4;%# links per cell
+M = 2;% MxM system
+slots = 50;%# of slots to be transmitted under the simulation
+uldldata = zeros(c,slots);
+H_ref = zeros(M,M,c*L,c*L);
+A = zeros(c*L,c*L);
+%define your own victim interferer pair A(victim_link,interferer_link)
+%remember links of same cell can't be interferer 
 A(4,5) = 1;
 A(8,1) = 1;
-H_ref(:,:,4,5) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
-H_ref(:,:,8,1) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
-N = 0.02*ones(1,2*L);
-
-
-for i = 1:2:2*L
+A(12,13) = 1;
+A(14,11) = 1;
+A(17,3) = 1;
+A(20,15) = 1;
+%defining the random channel matrix for victim interferer pair
+N = 0.02*ones(1,c*L);
+link_count_data = zeros(1,c*L);%captures the number of successful packets transmitted across the links
+link_count_fail = zeros(1,c*L);%captures the number of dropped packets across the links
+count = 0;%counts the total packets dropped
+for i = 1:2:c*L
     H_ref(:,:,i,i+1) = 1/sqrt(2)*complex(randn(M,M),randn(M,M));
-%     H_ref(:,:,i,i+1) = 1/sqrt(2)*eye(M)*complex(randn(1),randn(1));
     H_ref(:,:,i+1,i) = H_ref(:,:,i,i+1); %reciprocity
 end
 
 
-%finding the victim
+%finding the victim and it's interferer pair
 v = [];
 vs_pair = [];
-for i = 1:2*L
+for i = 1:c*L
     interference_array = A(i,:);
     interferer_num(i) = length(find(interference_array));
     if interferer_num(i) > 0
@@ -32,25 +39,23 @@ for i = 1:2*L
     end
 end
 V = length(v);
-snr_array = [1];
-for snr_iter = 1:length(snr_array)
-    count = 0;
-    link_count_data = zeros(1,2*L);
-link_count_fail = zeros(1,2*L);
+%defining channel between victim's rx and tx based on interferer's channel
+%power
 for i = 1:V
-    H_ref(:,:,v(i)+mod(v(i),2)-1,v(i)+mod(v(i),2)) = 10^(-20*snr_array(snr_iter)/20)*H_ref(:,:,v(i),vs_pair(i))+0.0002*complex(randn(M,M),randn(M,M));
-    H_ref(:,:,v(i)+mod(v(i),2),v(i)+mod(v(i),2)-1)=  H_ref(:,:,v(i)+mod(v(i),2)-1,v(i)+mod(v(i),2));
+    H_ref(:,:,v(i),vs_pair(i)) = 10^(20/10)*H_ref(:,:,v(i)+mod(v(i),2)-1,v(i)+mod(v(i),2))+0.0002*complex(randn(M,M),randn(M,M));
+%     H_ref(:,:,vs_pair(i),v(i))=  H_ref(:,:,v(i),vs_pair(i));
 end
-rate_mat = 1000*ones(2*L,V+1);
-rank_mat = (M+1)*ones(2*L,V+1);
-snr_min = 1000*ones(2*L,V+1);
+rate_mat = 1000*ones(c*L,V+1);
+rank_mat = (M+1)*ones(c*L,V+1);
+snr_min = 1000*ones(c*L,V+1);
 H_vv = H_ref(:,:,v(1)+mod(v(1),2)-1,v(1)+mod(v(1),2));
-s1 = 1:2*L;
+s1 = 1:c*L;
     for i = 1:V
         s1(v(i)) = 0;
     end
 s = find(s1);
 S = length(s);
+%finding standalone rank for links that are not victim
 for i = 1:S
 %     victim = 0;
     H(:,:,:) = H_ref(:,:,s(i),:);
@@ -59,6 +64,9 @@ for i = 1:S
     interferer = find(A(ind,:));
     [standalone_rank(ind),rank_mat(ind,1),rate_mat(ind,1),snr_min(ind,1)] = standalone_rank_SIC_CU(H,N0,M,ind,interferer_num(ind),interferer);
 end
+%finding rank for interferer when victim is seleceted
+%select rank for victim and use that rank for calculating 
+%pre-SIC SINR of interferer
 for i = 1:V
     H(:,:,:) = H_ref(:,:,v(i),:);
     N0 = N(v(i)+(2*mod(v(i),2)-1));
@@ -84,7 +92,7 @@ rank_mat(:,i+1) = min(rank_mat(:,1),rank_mat(:,i+1));
 end
 
 %assuming 2 users per cell and 2 cells in total
-c = 2;
+c = 5;
 l = 2;
 B = 1;
 B = B_matrix_creation_CU(B,l);
@@ -94,15 +102,19 @@ for i = 1:c-1
 end
 
 iter = length(B); %always return the largest dimension of matrix, column is always large
+w = 15*ones(c*L,1);
+% w = zeros(2*L,1);
+% w(4) = 130;
+% w(5) = 130;
 for slots_ind = 1:slots
 
 % Calculate weights
-r = poissrnd(0.0446, 2*L, 1); % (6 * 10^6 / 2000)/(8400 * 8)
-w = min(r, 1);
-if slots_ind > 1
-    w = w + w_new;
-end
-w_new = zeros(2*L, 1);
+% % % % r = poissrnd(0.0446, 2*L, 1); % (6 * 10^6 / 2000)/(8400 * 8)
+% % % % w = min(r, 1);
+% % % % if slots_ind > 1
+% % % %     w = w + w_new;
+% % % % end
+% % % % w_new = zeros(2*L, 1);
     
 for i = 1:iter
     b = B(:,i);
@@ -120,6 +132,7 @@ for i = 1:iter
 end
   [dummy B_ind] =  max(obj);
   b = B(:,B_ind);
+  
 %selecting rank for the scheduled links
 rank_sel = rank_mat(:,1); % assign standalone rate in the beginning
 selected_ind = find(b');
@@ -139,6 +152,7 @@ link = find(b');
 cell = length(link);
 for i = 1:cell
     cell_number = ceil(link(i)/l);
+    uldldata(i,slots_ind) = mod(link(i),2);
     [lia,loc] = ismember(link(i),v);
     rank = rank_sel(link(i));
     mod_order = 1;
@@ -163,18 +177,27 @@ for i = 1:cell
         %update weight of link(i) position
         w_new(link(i)) = 0;
         link_count_data(link(i)) = link_count_data(link(i))+1;
+        w(link(i)) = w(link(i))-1;
     else
         w_new(link(i)) = w(link(i)) + 1;
         count = count+1;
         link_count_fail(link(i)) = link_count_fail(link(i))+1;
-%         if ((link_count_fail(link(i))/slots_ind)>0.1)
-%             rank_mat(link(i),1) = rank_mat(link(i),1)-1;
-%             if(rank_mat(link(i))==0)
-%                 rate_mat(link(i),1) = 0;
-%             end
-%         end
     end
 end
 end
-success_rate(snr_iter) = (sum(link_count_fail(v))+sum(link_count_fail(vs_pair)))/(c*slots);
-end
+figure(5);plot(link_count_data);
+xlabel("Links");
+ylabel("packets transmitted successfully");
+title("packets transmitted across links for 500 slots");
+figure(6);plot(link_count_fail);
+xlabel("Links");
+ylabel("packets dropped");
+title("packets dropped across links for 500 slots");
+figure(7);plot(abs(rate_mat(:,1)));
+xlabel("Links");
+ylabel("Standalone rate of links");
+title("Standalone rate of links for realization");
+figure(8);imagesc(uldldata);
+xlabel("slots");
+ylabel("cells");
+title("UL and DL slots across cells");%yellow is DL and blue is UL
